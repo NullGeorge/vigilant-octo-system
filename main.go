@@ -235,10 +235,15 @@ func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) {
 	}
 
 	if rs.Data.Play != "" {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      fmt.Sprintf("[src](%s)", rs.Data.Play),
-			ParseMode: models.ParseModeMarkdown,
+		sizeText := "unknown"
+		if size, err := fetchContentLength(rs.Data.Play); err == nil {
+			sizeText = fmt.Sprintf("%d bytes", size)
+		}
+		fmt.Printf("TikTok video found, sending: url=%s size=%s\n", rs.Data.Play, sizeText)
+
+		b.SendVideo(ctx, &bot.SendVideoParams{
+			ChatID: chatID,
+			Video:  &models.InputFileString{Data: rs.Data.Play},
 		})
 	}
 }
@@ -282,6 +287,18 @@ func fetchTikTok(url string) (*response, error) {
 		return nil, err
 	}
 	return &rs, nil
+}
+
+func fetchContentLength(url string) (int64, error) {
+	resp, err := http.Head(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.ContentLength <= 0 {
+		return 0, fmt.Errorf("unknown content length")
+	}
+	return resp.ContentLength, nil
 }
 
 func makeVideo(imageURLs []string, audioURL string, duration int) ([]byte, error) {
