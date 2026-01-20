@@ -109,16 +109,23 @@ func logTikTok(format string, args ...interface{}) {
 
 func mainRouter(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.InlineQuery != nil {
+		log.Printf("incoming update type=inline_query id=%s query=%q", update.InlineQuery.ID, update.InlineQuery.Query)
 		handlerInline(ctx, b, update)
 		return
 	}
 	if update.Message != nil {
+		log.Printf("incoming update type=message chat_id=%d text=%q", update.Message.Chat.ID, update.Message.Text)
 		handlerMessage(ctx, b, update)
 	}
 }
 
 func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
-	link := tiktokRegex.FindString(update.InlineQuery.Query)
+	inlineID := update.InlineQuery.ID
+	query := update.InlineQuery.Query
+	log.Printf("inline query received id=%s query=%q", inlineID, query)
+
+	link := tiktokRegex.FindString(query)
+	log.Printf("inline query parsed link id=%s link=%q", inlineID, link)
 	if link == "" {
 		return
 	}
@@ -143,9 +150,9 @@ func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
 				"handlerInline fetch status=%s link=%s has_images=%t has_play=%t image_count=%d err=%v",
 				status,
 				link,
-				hasImages,
-				hasPlay,
-				imageCount,
+				len(rs.Data.Images) > 0,
+				rs.Data.Play != "",
+				len(rs.Data.Images),
 				err,
 			)
 		}
@@ -154,14 +161,15 @@ func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logTikTok(
 		"handlerInline fetch status=success link=%s has_images=%t has_play=%t image_count=%d",
 		link,
-		hasImages,
-		hasPlay,
-		imageCount,
+		len(rs.Data.Images) > 0,
+		rs.Data.Play != "",
+		len(rs.Data.Images),
 	)
 
 	if hasImages {
 		botUsername := os.Getenv("BOT_USERNAME")
 		if botUsername == "" {
+			log.Printf("inline query bot username empty id=%s link=%q", inlineID, link)
 			return
 		}
 
@@ -234,15 +242,12 @@ func handlerMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
 		logTikTok("handlerMessage fetch status=error link=%s err=%v", link, err)
 		return
 	}
-	hasImages := len(rs.Data.Images) > 0
-	hasPlay := rs.Data.Play != ""
-	imageCount := len(rs.Data.Images)
 	logTikTok(
 		"handlerMessage fetch status=success link=%s has_images=%t has_play=%t image_count=%d",
 		link,
-		hasImages,
-		hasPlay,
-		imageCount,
+		len(rs.Data.Images) > 0,
+		rs.Data.Play != "",
+		len(rs.Data.Images),
 	)
 }
 
@@ -280,15 +285,12 @@ func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) (*re
 		logTikTok("sendTikTok status=error link=%s err=%v", link, err)
 		return nil, err
 	}
-	hasImages := len(rs.Data.Images) > 0
-	hasPlay := rs.Data.Play != ""
-	imageCount := len(rs.Data.Images)
 	logTikTok(
 		"sendTikTok status=success link=%s has_images=%t has_play=%t image_count=%d",
 		link,
-		hasImages,
-		hasPlay,
-		imageCount,
+		len(rs.Data.Images) > 0,
+		rs.Data.Play != "",
+		len(rs.Data.Images),
 	)
 
 	if hasImages {
@@ -297,11 +299,16 @@ func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) (*re
 		return rs, nil
 	}
 
-	if hasPlay {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:    chatID,
-			Text:      fmt.Sprintf("[src](%s)", rs.Data.Play),
-			ParseMode: models.ParseModeMarkdown,
+	if rs.Data.Play != "" {
+		sizeText := "unknown"
+		if size, err := fetchContentLength(rs.Data.Play); err == nil {
+			sizeText = fmt.Sprintf("%d bytes", size)
+		}
+		fmt.Printf("TikTok video found, sending: url=%s size=%s\n", rs.Data.Play, sizeText)
+
+		b.SendVideo(ctx, &bot.SendVideoParams{
+			ChatID: chatID,
+			Video:  &models.InputFileString{Data: rs.Data.Play},
 		})
 	}
 	return rs, nil
@@ -348,17 +355,26 @@ func fetchTikTok(url string) (*response, error) {
 		logTikTok("fetchTikTok json_decode_error link=%s err=%v", url, err)
 		return nil, err
 	}
-	hasImages := len(rs.Data.Images) > 0
-	hasPlay := rs.Data.Play != ""
-	imageCount := len(rs.Data.Images)
 	logTikTok(
 		"fetchTikTok status=success link=%s has_images=%t has_play=%t image_count=%d",
 		url,
-		hasImages,
-		hasPlay,
-		imageCount,
+		len(rs.Data.Images) > 0,
+		rs.Data.Play != "",
+		len(rs.Data.Images),
 	)
 	return &rs, nil
+}
+
+func fetchContentLength(url string) (int64, error) {
+	resp, err := http.Head(url)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.ContentLength <= 0 {
+		return 0, fmt.Errorf("unknown content length")
+	}
+	return resp.ContentLength, nil
 }
 
 func makeVideo(imageURLs []string, audioURL string, duration int) ([]byte, error) {
