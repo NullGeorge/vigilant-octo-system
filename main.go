@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -103,28 +104,43 @@ var inlineCache = newLinkCache()
 
 func mainRouter(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.InlineQuery != nil {
+		log.Printf("incoming update type=inline_query id=%s query=%q", update.InlineQuery.ID, update.InlineQuery.Query)
 		handlerInline(ctx, b, update)
 		return
 	}
 	if update.Message != nil {
+		log.Printf("incoming update type=message chat_id=%d text=%q", update.Message.Chat.ID, update.Message.Text)
 		handlerMessage(ctx, b, update)
 	}
 }
 
 func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
-	link := tiktokRegex.FindString(update.InlineQuery.Query)
+	inlineID := update.InlineQuery.ID
+	query := update.InlineQuery.Query
+	log.Printf("inline query received id=%s query=%q", inlineID, query)
+
+	link := tiktokRegex.FindString(query)
+	log.Printf("inline query parsed link id=%s link=%q", inlineID, link)
 	if link == "" {
 		return
 	}
 
 	rs, err := fetchTikTok(link)
-	if err != nil || (rs.Data.Play == "" && len(rs.Data.Images) == 0) {
+	if err != nil {
+		log.Printf("inline query fetch failed id=%s link=%q err=%v", inlineID, link, err)
+		return
+	}
+	hasImages := len(rs.Data.Images) > 0
+	hasPlay := rs.Data.Play != ""
+	log.Printf("inline query fetch result id=%s link=%q play=%t images=%t", inlineID, link, hasPlay, hasImages)
+	if !hasPlay && !hasImages {
 		return
 	}
 
-	if len(rs.Data.Images) > 0 {
+	if hasImages {
 		botUsername := os.Getenv("BOT_USERNAME")
 		if botUsername == "" {
+			log.Printf("inline query bot username empty id=%s link=%q", inlineID, link)
 			return
 		}
 
