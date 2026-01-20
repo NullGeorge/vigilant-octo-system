@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -80,7 +81,16 @@ func main() {
 		bot.WithDefaultHandler(mainRouter),
 	}
 
-	b, err := bot.New(os.Getenv("TOKEN"), opts...)
+	token := os.Getenv("TOKEN")
+	if token == "" {
+		loadEnvFile(".env")
+		token = os.Getenv("TOKEN")
+	}
+	if token == "" {
+		panic("empty TOKEN env")
+	}
+
+	b, err := bot.New(token, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -357,6 +367,35 @@ func downloadToMem(url string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
+}
+
+func loadEnvFile(path string) {
+	file, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		value := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+		_ = os.Setenv(key, value)
+	}
 }
 
 type response struct {
