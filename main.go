@@ -132,6 +132,12 @@ func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
 	logTikTok("handlerInline link=%s", link)
 
 	rs, err := fetchTikTok(link)
+	hasImages := rs != nil && len(rs.Data.Images) > 0
+	hasPlay := rs != nil && rs.Data.Play != ""
+	imageCount := 0
+	if rs != nil {
+		imageCount = len(rs.Data.Images)
+	}
 	if err != nil || (rs.Data.Play == "" && len(rs.Data.Images) == 0) {
 		status := "success"
 		if err != nil {
@@ -287,7 +293,7 @@ func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) (*re
 		len(rs.Data.Images),
 	)
 
-	if len(rs.Data.Images) > 0 {
+	if hasImages {
 		caption := fmt.Sprintf("[src](%s)", link)
 		sendPhotoGroups(ctx, b, chatID, rs.Data.Images, caption)
 		return rs, nil
