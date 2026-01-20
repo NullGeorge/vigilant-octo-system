@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ var tiktokRegex = regexp.MustCompile(`https?://(?:vm|vt|www)\.tiktok\.com/[a-zA-
 const (
 	cacheTTL       = 10 * time.Minute
 	startTokenPref = "tt_"
+	logPrefix      = "[tiktok-bot]"
 )
 
 type cacheItem struct {
@@ -101,6 +103,10 @@ func main() {
 
 var inlineCache = newLinkCache()
 
+func logTikTok(format string, args ...interface{}) {
+	log.Printf("%s %s", logPrefix, fmt.Sprintf(format, args...))
+}
+
 func mainRouter(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if update.InlineQuery != nil {
 		handlerInline(ctx, b, update)
@@ -116,13 +122,44 @@ func handlerInline(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if link == "" {
 		return
 	}
+	logTikTok("handlerInline link=%s", link)
 
 	rs, err := fetchTikTok(link)
+	hasImages := rs != nil && len(rs.Data.Images) > 0
+	hasPlay := rs != nil && rs.Data.Play != ""
+	imageCount := 0
+	if rs != nil {
+		imageCount = len(rs.Data.Images)
+	}
 	if err != nil || (rs.Data.Play == "" && len(rs.Data.Images) == 0) {
+		status := "success"
+		if err != nil {
+			status = "error"
+		}
+		if rs == nil {
+			logTikTok("handlerInline fetch status=%s link=%s err=%v", status, link, err)
+		} else {
+			logTikTok(
+				"handlerInline fetch status=%s link=%s has_images=%t has_play=%t image_count=%d err=%v",
+				status,
+				link,
+				hasImages,
+				hasPlay,
+				imageCount,
+				err,
+			)
+		}
 		return
 	}
+	logTikTok(
+		"handlerInline fetch status=success link=%s has_images=%t has_play=%t image_count=%d",
+		link,
+		hasImages,
+		hasPlay,
+		imageCount,
+	)
 
-	if len(rs.Data.Images) > 0 {
+	if hasImages {
 		botUsername := os.Getenv("BOT_USERNAME")
 		if botUsername == "" {
 			return
@@ -190,8 +227,23 @@ func handlerMessage(ctx context.Context, b *bot.Bot, update *models.Update) {
 	if link == "" {
 		return
 	}
+	logTikTok("handlerMessage link=%s", link)
 
-	sendTikTok(ctx, b, update.Message.Chat.ID, link)
+	rs, err := sendTikTok(ctx, b, update.Message.Chat.ID, link)
+	if err != nil {
+		logTikTok("handlerMessage fetch status=error link=%s err=%v", link, err)
+		return
+	}
+	hasImages := len(rs.Data.Images) > 0
+	hasPlay := rs.Data.Play != ""
+	imageCount := len(rs.Data.Images)
+	logTikTok(
+		"handlerMessage fetch status=success link=%s has_images=%t has_play=%t image_count=%d",
+		link,
+		hasImages,
+		hasPlay,
+		imageCount,
+	)
 }
 
 func handleStartPayload(ctx context.Context, b *bot.Bot, update *models.Update) bool {
@@ -222,25 +274,37 @@ func handleStartPayload(ctx context.Context, b *bot.Bot, update *models.Update) 
 	return true
 }
 
-func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) {
+func sendTikTok(ctx context.Context, b *bot.Bot, chatID int64, link string) (*response, error) {
 	rs, err := fetchTikTok(link)
 	if err != nil {
-		return
+		logTikTok("sendTikTok status=error link=%s err=%v", link, err)
+		return nil, err
 	}
+	hasImages := len(rs.Data.Images) > 0
+	hasPlay := rs.Data.Play != ""
+	imageCount := len(rs.Data.Images)
+	logTikTok(
+		"sendTikTok status=success link=%s has_images=%t has_play=%t image_count=%d",
+		link,
+		hasImages,
+		hasPlay,
+		imageCount,
+	)
 
-	if len(rs.Data.Images) > 0 {
+	if hasImages {
 		caption := fmt.Sprintf("[src](%s)", link)
 		sendPhotoGroups(ctx, b, chatID, rs.Data.Images, caption)
-		return
+		return rs, nil
 	}
 
-	if rs.Data.Play != "" {
+	if hasPlay {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:    chatID,
 			Text:      fmt.Sprintf("[src](%s)", rs.Data.Play),
 			ParseMode: models.ParseModeMarkdown,
 		})
 	}
+	return rs, nil
 }
 
 func sendPhotoGroups(ctx context.Context, b *bot.Bot, chatID int64, imageURLs []string, caption string) {
@@ -273,14 +337,27 @@ func sendPhotoGroups(ctx context.Context, b *bot.Bot, chatID int64, imageURLs []
 func fetchTikTok(url string) (*response, error) {
 	resp, err := http.Get(fmt.Sprintf("https://www.tikwm.com/api/?url=%s", url))
 	if err != nil {
+		logTikTok("fetchTikTok status=error link=%s err=%v", url, err)
 		return nil, err
 	}
 	defer resp.Body.Close()
+	logTikTok("fetchTikTok http_status=%d link=%s", resp.StatusCode, url)
 
 	var rs response
 	if err := json.NewDecoder(resp.Body).Decode(&rs); err != nil {
+		logTikTok("fetchTikTok json_decode_error link=%s err=%v", url, err)
 		return nil, err
 	}
+	hasImages := len(rs.Data.Images) > 0
+	hasPlay := rs.Data.Play != ""
+	imageCount := len(rs.Data.Images)
+	logTikTok(
+		"fetchTikTok status=success link=%s has_images=%t has_play=%t image_count=%d",
+		url,
+		hasImages,
+		hasPlay,
+		imageCount,
+	)
 	return &rs, nil
 }
 
